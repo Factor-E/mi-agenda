@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mi Agenda Virtual - Factor E</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; transition: background 0.2s ease; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    const { useState, useEffect } = React;
+
+    const CATEGORIES = [
+      { id: 'operativo', label: 'Operativo', icon: '⚡', color: 'bg-blue-900', borderColor: 'border-blue-700', textColor: 'text-blue-300', pdf: [37, 99, 235], pdfLight: [219, 234, 254] },
+      { id: 'comercial', label: 'Comercial', icon: '📈', color: 'bg-green-900', borderColor: 'border-green-700', textColor: 'text-green-300', pdf: [22, 163, 74], pdfLight: [220, 252, 231] },
+      { id: 'estrategico', label: 'Estratégico', icon: '🧭', color: 'bg-purple-900', borderColor: 'border-purple-700', textColor: 'text-purple-300', pdf: [126, 34, 206], pdfLight: [237, 233, 254] },
+      { id: 'personal', label: 'Personal', icon: '🪴', color: 'bg-teal-900', borderColor: 'border-teal-700', textColor: 'text-teal-300', pdf: [13, 148, 136], pdfLight: [204, 251, 241] }
+    ];
+
+    const PRIORITY_STYLE = {
+      '1': { badge: 'bg-gradient-to-br from-yellow-300 to-yellow-600 text-yellow-950 border border-yellow-200', pdf: [217, 164, 6], name: 'Oro' },
+      '2': { badge: 'bg-gradient-to-br from-slate-200 to-slate-400 text-slate-900 border border-slate-100', pdf: [148, 163, 184], name: 'Plata' },
+      '3': { badge: 'bg-gradient-to-br from-amber-700 to-amber-900 text-amber-100 border border-amber-600', pdf: [146, 84, 33], name: 'Bronce' }
+    };
+
+    const PRIORITY_WEIGHT = { '1': 5, '2': 3, '3': 1 };
+    const PILAR_BONUS = 4;
+
+    // ---- ACCESO ----
+    // Agregá acá cada persona que te compró, antes de mandarle el archivo.
+    // El nombre y el correo tienen que coincidir EXACTO con lo que la persona va a tipear.
+    const ALLOWED_USERS = [
+      { name: 'Juan Ignacio Cayssials', email: 'juani@factore.com.ar' },
+      { name: 'Juan Ignacio Cayssials', email: 'factore.cays@gmail.com' },
+      { name: 'Juan Ignacio Cayssials', email: 'caysjuani@gmail.com' }
+      // { name: 'Nombre Apellido', email: 'correo@ejemplo.com' },
+    ];
+    const normalizeStr = (s) => (s || '').trim().toLowerCase();
+
+    function emptyDay() {
+      return {
+        phrase: '',
+        priorities: [
+          { text: '', done: false },
+          { text: '', done: false },
+          { text: '', done: false }
+        ],
+        tasks: [],
+        notes: [],
+        timers: {},
+        timerLog: []
+      };
+    }
+
+    function emptyQuickAdd() {
+      return Object.fromEntries(CATEGORIES.map(c => [c.id, { text: '', time: '', priority: '2', reminder: false }]));
+    }
+
+    function formatTime(totalSeconds) {
+      const s = Math.max(0, Math.floor(totalSeconds));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const ss = s % 60;
+      const pad = (n) => String(n).padStart(2, '0');
+      return h > 0 ? `${pad(h)}:${pad(m)}:${pad(ss)}` : `${pad(m)}:${pad(ss)}`;
+    }
+
+    function getMotivation(pct) {
+      if (pct === 0) return 'El día recién empieza. Tomate tu tiempo para arrancar.';
+      if (pct < 30) return 'Ya estás en marcha. Cada paso cuenta, vas a tu ritmo.';
+      if (pct < 60) return 'Vas bien encaminado. Se nota el esfuerzo hasta acá.';
+      if (pct < 85) return 'Gran avance. Estás cerca, seguí así.';
+      if (pct < 100) return 'Ya casi. Un poquito más y cerrás el día completo.';
+      return 'Día completo. Bien ahí, te lo ganaste.';
+    }
+
+    function getTheme(mode) {
+      const dark = mode === 'dark';
+      return {
+        mode,
+        bodyBg: dark ? '#1E293B' : '#F1F5F9',
+        page: dark ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-900',
+        card: dark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200',
+        cardAlt: dark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200',
+        input: dark ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400',
+        heading: dark ? 'text-white' : 'text-slate-900',
+        muted: dark ? 'text-slate-400' : 'text-slate-500',
+        faint: dark ? 'text-slate-500' : 'text-slate-400',
+        navBtn: dark ? 'bg-slate-800 hover:bg-slate-700 text-white border-slate-700' : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-300',
+        cellEmpty: dark ? 'bg-slate-900 border-slate-800 hover:border-slate-600' : 'bg-white border-slate-200 hover:border-slate-400',
+        cellToday: dark ? 'bg-slate-700 border-2 border-slate-500' : 'bg-slate-200 border-2 border-slate-400'
+      };
+    }
+
+    function MiDia() {
+      const [authChecked, setAuthChecked] = useState(false);
+      const [authorized, setAuthorized] = useState(false);
+      const [currentUserEmail, setCurrentUserEmail] = useState('');
+      const [loginName, setLoginName] = useState('');
+      const [loginEmail, setLoginEmail] = useState('');
+      const [loginError, setLoginError] = useState('');
+
+      useEffect(() => {
+        try {
+          const saved = localStorage.getItem('miDiaAuth');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            const match = ALLOWED_USERS.find(u => normalizeStr(u.email) === normalizeStr(parsed.email));
+            if (match) {
+              setAuthorized(true);
+              setCurrentUserEmail(normalizeStr(match.email));
+            }
+          }
+        } catch (e) {}
+        setAuthChecked(true);
+      }, []);
+
+      const handleLogin = () => {
+        const match = ALLOWED_USERS.find(u => normalizeStr(u.email) === normalizeStr(loginEmail));
+        if (match) {
+          localStorage.setItem('miDiaAuth', JSON.stringify({ name: match.name, email: match.email }));
+          setAuthorized(true);
+          setCurrentUserEmail(normalizeStr(match.email));
+          setLoginError('');
+        } else {
+          setLoginError('No encontramos ese nombre y correo en la lista de acceso. Revisá que estén escritos igual que cuando compraste, o consultá con Factor E.');
+        }
+      };
+
+      const handleLogout = () => {
+        localStorage.removeItem('miDiaAuth');
+        setAuthorized(false);
+        setCurrentUserEmail('');
+        setLoginName('');
+        setLoginEmail('');
+      };
+
+      const dataKey = 'miDia_data_' + currentUserEmail;
+      const themeKey = 'miDia_theme_' + currentUserEmail;
+
+      const [selectedDate, setSelectedDate] = useState(new Date());
+      const [data, setData] = useState({});
+      const [loaded, setLoaded] = useState(false);
+      const [quickAdd, setQuickAdd] = useState(emptyQuickAdd());
+      const [editingTask, setEditingTask] = useState(null);
+      const [activeReminder, setActiveReminder] = useState(null);
+      const [themeMode, setThemeMode] = useState('dark');
+
+      useEffect(() => {
+        if (!currentUserEmail) return;
+        try {
+          const saved = localStorage.getItem(dataKey);
+          setData(saved ? JSON.parse(saved) : {});
+          const savedTheme = localStorage.getItem(themeKey);
+          setThemeMode(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'dark');
+        } catch (e) {
+          console.error('Error cargando datos:', e);
+        }
+        setLoaded(true);
+      }, [currentUserEmail]);
+
+      useEffect(() => {
+        if (loaded && currentUserEmail) localStorage.setItem(dataKey, JSON.stringify(data));
+      }, [data, loaded, currentUserEmail]);
+
+      const T = getTheme(themeMode);
+
+      useEffect(() => {
+        document.body.style.background = T.bodyBg;
+        if (loaded && currentUserEmail) localStorage.setItem(themeKey, themeMode);
+      }, [themeMode, loaded, currentUserEmail]);
+
+      const getDateKey = (date) => {
+        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        return d.toISOString().split('T')[0];
+      };
+      const dateKey = getDateKey(selectedDate);
+
+      const getDay = (key) => data[key] || emptyDay();
+      const dayData = getDay(dateKey);
+
+      const updateDay = (updates, key = dateKey) => {
+        const current = getDay(key);
+        setData(prev => ({ ...prev, [key]: { ...current, ...updates } }));
+      };
+
+      const updateQuickAdd = (catId, field, value) => {
+        setQuickAdd(prev => ({ ...prev, [catId]: { ...prev[catId], [field]: value } }));
+      };
+
+      const addQuickTask = (catId) => {
+        const qa = quickAdd[catId];
+        if (!qa.text.trim()) return;
+        const newTask = {
+          id: Date.now(),
+          text: qa.text.trim(),
+          category: catId,
+          time: qa.time,
+          priority: qa.priority,
+          reminder: qa.reminder,
+          reminded: false,
+          done: false
+        };
+        updateDay({ tasks: [...dayData.tasks, newTask] });
+        setQuickAdd(prev => ({ ...prev, [catId]: { text: '', time: '', priority: qa.priority, reminder: false } }));
+      };
+
+      const deleteTask = (taskId) => {
+        updateDay({ tasks: dayData.tasks.filter(t => t.id !== taskId) });
+      };
+
+      const toggleTask = (taskId) => {
+        updateDay({ tasks: dayData.tasks.map(t => t.id === taskId ? { ...t, done: !t.done } : t) });
+      };
+
+      // ---- Recordatorios / alarma ----
+      const requestNotifPermission = () => {
+        if (window.Notification && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      };
+
+      const toggleTaskReminder = (taskId) => {
+        const task = dayData.tasks.find(t => t.id === taskId);
+        if (!task) return;
+        const newVal = !task.reminder;
+        if (newVal) requestNotifPermission();
+        updateDay({ tasks: dayData.tasks.map(t => t.id === taskId ? { ...t, reminder: newVal, reminded: false } : t) });
+      };
+
+      const fireReminder = (task) => {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = 'sine';
+          osc.frequency.value = 880;
+          gain.gain.setValueAtTime(0.25, ctx.currentTime);
+          osc.start();
+          osc.frequency.setValueAtTime(660, ctx.currentTime + 0.25);
+          osc.stop(ctx.currentTime + 0.6);
+        } catch (e) {}
+        if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
+        if (window.Notification && Notification.permission === 'granted') {
+          try { new Notification('⏰ Recordatorio · Mi Agenda', { body: task.text }); } catch (e) {}
+        }
+        setActiveReminder(task);
+      };
+
+      useEffect(() => {
+        const interval = setInterval(() => {
+          const todayKey = getDateKey(new Date());
+          const todayData = data[todayKey];
+          if (!todayData || !todayData.tasks || todayData.tasks.length === 0) return;
+          const now = new Date();
+          const nowStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+          const dueTask = todayData.tasks.find(t => t.reminder && !t.done && !t.reminded && t.time && t.time <= nowStr);
+          if (dueTask) {
+            fireReminder(dueTask);
+            setData(prev => ({
+              ...prev,
+              [todayKey]: {
+                ...prev[todayKey],
+                tasks: prev[todayKey].tasks.map(t => t.id === dueTask.id ? { ...t, reminded: true } : t)
+              }
+            }));
+          }
+        }, 15000);
+        return () => clearInterval(interval);
+      }, [data]);
+
+      const updatePriorityText = (idx, text) => {
+        const priorities = dayData.priorities.map((p, i) => i === idx ? { ...p, text } : p);
+        updateDay({ priorities });
+      };
+
+      const togglePriorityDone = (idx) => {
+        const priorities = dayData.priorities.map((p, i) => i === idx ? { ...p, done: !p.done } : p);
+        updateDay({ priorities });
+      };
+
+      // ---- Bloc de notas ----
+      const notes = dayData.notes || [];
+      const [newNoteText, setNewNoteText] = useState('');
+
+      const addNote = () => {
+        if (!newNoteText.trim()) return;
+        updateDay({ notes: [...notes, { id: Date.now(), text: newNoteText.trim(), done: false }] });
+        setNewNoteText('');
+      };
+
+      const updateNoteText = (id, text) => {
+        updateDay({ notes: notes.map(n => n.id === id ? { ...n, text } : n) });
+      };
+
+      const toggleNote = (id) => {
+        updateDay({ notes: notes.map(n => n.id === id ? { ...n, done: !n.done } : n) });
+      };
+
+      const deleteNote = (id) => {
+        updateDay({ notes: notes.filter(n => n.id !== id) });
+      };
+
+      const moveNote = (id, dir) => {
+        const idx = notes.findIndex(n => n.id === id);
+        const target = idx + dir;
+        if (idx < 0 || target < 0 || target >= notes.length) return;
+        const reordered = [...notes];
+        [reordered[idx], reordered[target]] = [reordered[target], reordered[idx]];
+        updateDay({ notes: reordered });
+      };
+
+      const [dragNoteId, setDragNoteId] = useState(null);
+      const [dragOverNoteId, setDragOverNoteId] = useState(null);
+
+      const reorderNotes = (fromId, toId) => {
+        if (fromId === toId) return;
+        const fromIdx = notes.findIndex(n => n.id === fromId);
+        const toIdx = notes.findIndex(n => n.id === toId);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const reordered = [...notes];
+        const [moved] = reordered.splice(fromIdx, 1);
+        reordered.splice(toIdx, 0, moved);
+        updateDay({ notes: reordered });
+      };
+
+      // ---- Cronómetro digital por bloque ----
+      const [, setTick] = useState(0);
+      const timers = dayData.timers || {};
+      const getTimer = (catId) => timers[catId] || { accumulated: 0, running: false, startedAt: null };
+      const getElapsedSeconds = (catId) => {
+        const t = getTimer(catId);
+        return t.accumulated + (t.running ? (Date.now() - t.startedAt) / 1000 : 0);
+      };
+
+      const startTimer = (catId) => {
+        const t = getTimer(catId);
+        if (t.running) return;
+        updateDay({ timers: { ...timers, [catId]: { ...t, running: true, startedAt: Date.now() } } });
+      };
+
+      const pauseTimer = (catId) => {
+        const t = getTimer(catId);
+        if (!t.running) return;
+        const endedAt = Date.now();
+        const sessionSeconds = (endedAt - t.startedAt) / 1000;
+        const elapsed = t.accumulated + sessionSeconds;
+        const logEntry = { id: Date.now(), category: catId, start: t.startedAt, end: endedAt, duration: Math.round(sessionSeconds) };
+        updateDay({
+          timers: { ...timers, [catId]: { accumulated: elapsed, running: false, startedAt: null } },
+          timerLog: [...(dayData.timerLog || []), logEntry]
+        });
+      };
+
+      const resetTimer = (catId) => {
+        updateDay({ timers: { ...timers, [catId]: { accumulated: 0, running: false, startedAt: null } } });
+      };
+
+      useEffect(() => {
+        const anyRunning = CATEGORIES.some(c => getTimer(c.id).running);
+        if (!anyRunning) return;
+        const id = setInterval(() => setTick(t => t + 1), 1000);
+        return () => clearInterval(id);
+      }, [data, dateKey]);
+
+      // ---- Edición completa de tarea ----
+      const openEdit = (task) => {
+        setEditingTask({ ...task, _originalDate: dateKey, date: dateKey });
+      };
+
+      const saveEdit = () => {
+        if (!editingTask || !editingTask.text.trim()) return;
+        const original = editingTask._originalDate;
+        const newDate = editingTask.date;
+        const cleanTask = {
+          id: editingTask.id,
+          text: editingTask.text.trim(),
+          time: editingTask.time,
+          category: editingTask.category,
+          priority: editingTask.priority,
+          reminder: editingTask.reminder,
+          reminded: editingTask.reminder ? false : (editingTask.reminded || false),
+          done: editingTask.done
+        };
+        if (newDate === original) {
+          updateDay({ tasks: getDay(original).tasks.map(t => t.id === cleanTask.id ? cleanTask : t) }, original);
+        } else {
+          updateDay({ tasks: getDay(original).tasks.filter(t => t.id !== cleanTask.id) }, original);
+          const targetDay = getDay(newDate);
+          updateDay({ tasks: [...targetDay.tasks, cleanTask] }, newDate);
+        }
+        setEditingTask(null);
+      };
+
+      // ---- Puntaje ponderado ----
+      const taskPoints = dayData.tasks.reduce((sum, t) => sum + PRIORITY_WEIGHT[t.priority], 0);
+      const taskPointsDone = dayData.tasks.filter(t => t.done).reduce((sum, t) => sum + PRIORITY_WEIGHT[t.priority], 0);
+      const activePriorities = dayData.priorities.filter(p => p.text.trim());
+      const pilarPoints = activePriorities.length * PILAR_BONUS;
+      const pilarPointsDone = activePriorities.filter(p => p.done).length * PILAR_BONUS;
+      const totalPossible = taskPoints + pilarPoints;
+      const totalDone = taskPointsDone + pilarPointsDone;
+      const progressPercent = totalPossible > 0 ? Math.round((totalDone / totalPossible) * 100) : 0;
+      const motivation = getMotivation(progressPercent);
+
+      const completedCount = dayData.tasks.filter(t => t.done).length + activePriorities.filter(p => p.done).length;
+      const totalItems = dayData.tasks.length + activePriorities.length;
+
+      const pendingTasks = dayData.tasks.filter(t => !t.done);
+      const tasksByCategory = {};
+      CATEGORIES.forEach(cat => {
+        tasksByCategory[cat.id] = pendingTasks.filter(t => t.category === cat.id).sort((a, b) => b.priority - a.priority);
+      });
+      const completedTasks = dayData.tasks.filter(t => t.done);
+
+      const catById = (id) => CATEGORIES.find(c => c.id === id) || CATEGORIES[0];
+      const formatClock = (ts) => new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const timerLog = dayData.timerLog || [];
+      const sortedLog = [...timerLog].sort((a, b) => b.start - a.start);
+      const totalsByCategory = {};
+      CATEGORIES.forEach(c => { totalsByCategory[c.id] = timerLog.filter(l => l.category === c.id).reduce((s, l) => s + l.duration, 0); });
+      const deleteLogEntry = (id) => updateDay({ timerLog: timerLog.filter(l => l.id !== id) });
+
+      // ---- PDF ----
+      const exportPDF = () => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        const pageW = doc.internal.pageSize.width;
+        const pageH = doc.internal.pageSize.height;
+        const marginX = 15;
+        const contentW = pageW - marginX * 2;
+        let y = 45;
+
+        const ensureSpace = (h) => { if (y + h > pageH - 15) { doc.addPage(); y = 20; } };
+
+        const strike = (text, x, ty) => {
+          doc.text(text, x, ty);
+          const w = doc.getTextWidth(text);
+          doc.setDrawColor(148, 163, 184);
+          doc.setLineWidth(0.3);
+          doc.line(x, ty - 1.3, x + w, ty - 1.3);
+        };
+
+        const checkbox = (x, ty, done, rgb) => {
+          doc.setDrawColor(rgb[0], rgb[1], rgb[2]);
+          doc.setLineWidth(0.4);
+          if (done) {
+            doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+            doc.roundedRect(x, ty - 3, 3.5, 3.5, 0.7, 0.7, 'F');
+            doc.setDrawColor(255, 255, 255);
+            doc.line(x + 0.6, ty - 1.3, x + 1.4, ty - 0.5);
+            doc.line(x + 1.4, ty - 0.5, x + 3, ty - 2.8);
+          } else {
+            doc.roundedRect(x, ty - 3, 3.5, 3.5, 0.7, 0.7, 'S');
+          }
+        };
+
+        const sectionBand = (title, rgb) => {
+          ensureSpace(12);
+          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+          doc.roundedRect(marginX, y, contentW, 8, 1.5, 1.5, 'F');
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(11);
+          doc.text(title, marginX + 4, y + 5.5);
+          y += 13;
+        };
+
+        doc.setFillColor(15, 23, 42);
+        doc.rect(0, 0, pageW, 32, 'F');
+        doc.setFillColor(163, 230, 53);
+        doc.rect(0, 32, pageW, 1.5, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(22);
+        doc.text('Mi Agenda Virtual', marginX, 18);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(11);
+        doc.setTextColor(203, 213, 225);
+        doc.text(selectedDate.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), marginX, 26);
+
+        if (dayData.phrase) {
+          doc.setFont('helvetica', 'italic');
+          doc.setFontSize(10);
+          doc.setTextColor(51, 65, 85);
+          const phraseLines = doc.splitTextToSize('"' + dayData.phrase + '"', contentW);
+          doc.text(phraseLines, marginX, y);
+          y += phraseLines.length * 5 + 3;
+        }
+
+        doc.setFillColor(226, 232, 240);
+        doc.roundedRect(marginX, y, contentW - 20, 5, 2, 2, 'F');
+        if (progressPercent > 0) {
+          doc.setFillColor(34, 197, 94);
+          doc.roundedRect(marginX, y, (contentW - 20) * (progressPercent / 100), 5, 2, 2, 'F');
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(15, 23, 42);
+        doc.text(progressPercent + '%', marginX + contentW - 15, y + 4);
+        y += 12;
+
+        sectionBand('3 PRIORIDADES DEL DÍA', [15, 23, 42]);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        if (activePriorities.length === 0) {
+          doc.setTextColor(148, 163, 184);
+          doc.text('Sin prioridades cargadas.', marginX + 4, y);
+          y += 7;
+        } else {
+          activePriorities.forEach(p => {
+            ensureSpace(7);
+            checkbox(marginX + 2, y, p.done, [15, 23, 42]);
+            doc.setTextColor(p.done ? 100 : 30, p.done ? 116 : 41, p.done ? 139 : 59);
+            if (p.done) strike(p.text, marginX + 8, y); else doc.text(p.text, marginX + 8, y);
+            y += 6.5;
+          });
+        }
+        y += 4;
+
+        CATEGORIES.forEach(cat => {
+          const catTasks = dayData.tasks.filter(t => t.category === cat.id);
+          sectionBand(cat.icon + '  ' + cat.label.toUpperCase(), cat.pdf);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10);
+          if (catTasks.length === 0) {
+            doc.setTextColor(148, 163, 184);
+            doc.text('Sin tareas.', marginX + 4, y);
+            y += 7;
+          } else {
+            catTasks.forEach(t => {
+              ensureSpace(7);
+              checkbox(marginX + 2, y, t.done, cat.pdf);
+              const pStyle = PRIORITY_STYLE[t.priority];
+              doc.setTextColor(pStyle.pdf[0], pStyle.pdf[1], pStyle.pdf[2]);
+              doc.setFont('helvetica', 'bold');
+              doc.text('★' + t.priority, marginX + 8, y);
+              doc.setFont('helvetica', 'normal');
+              const timeStr = t.time ? t.time + '  ' : '';
+              doc.setTextColor(100, 116, 139);
+              doc.text(timeStr, marginX + 16, y);
+              const textX = marginX + (t.time ? 30 : 16);
+              doc.setTextColor(t.done ? 148 : 30, t.done ? 163 : 41, t.done ? 184 : 59);
+              if (t.done) strike(t.text, textX, y); else doc.text(t.text, textX, y);
+              y += 6.5;
+            });
+          }
+          y += 3;
+        });
+
+        sectionBand('📝 BLOC DE NOTAS', [217, 119, 6]);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        if (notes.length === 0) {
+          doc.setTextColor(148, 163, 184);
+          doc.text('Sin notas cargadas.', marginX + 4, y);
+          y += 7;
+        } else {
+          notes.forEach(n => {
+            ensureSpace(7);
+            checkbox(marginX + 2, y, n.done, [217, 119, 6]);
+            doc.setTextColor(n.done ? 148 : 30, n.done ? 163 : 41, n.done ? 184 : 59);
+            if (n.done) strike(n.text, marginX + 8, y); else doc.text(n.text, marginX + 8, y);
+            y += 6.5;
+          });
+        }
+        y += 4;
+
+        if (timerLog.length > 0) {
+          sectionBand('🕓 TIEMPO DEDICADO', [15, 23, 42]);
+          doc.setFontSize(10);
+          CATEGORIES.forEach(cat => {
+            if (totalsByCategory[cat.id] > 0) {
+              ensureSpace(7);
+              doc.setFillColor(cat.pdf[0], cat.pdf[1], cat.pdf[2]);
+              doc.circle(marginX + 3, y - 1.3, 1.3, 'F');
+              doc.setTextColor(30, 41, 59);
+              doc.setFont('helvetica', 'normal');
+              doc.text(cat.label + ':', marginX + 8, y);
+              doc.setFont('helvetica', 'bold');
+              doc.text(formatTime(totalsByCategory[cat.id]), marginX + 45, y);
+              y += 6.5;
+            }
+          });
+        }
+
+        const pageCount = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= pageCount; i++) {
+          doc.setPage(i);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text('Mi Agenda Virtual Factor E · ' + getDateKey(selectedDate), marginX, pageH - 8);
+          doc.text(String(i) + ' / ' + pageCount, pageW - marginX - 10, pageH - 8);
+        }
+
+        doc.save('mi-agenda-virtual-factor-e-' + getDateKey(selectedDate) + '.pdf');
+      };
+
+      // ---- Calendario ----
+      const year = selectedDate.getFullYear();
+      const month = selectedDate.getMonth();
+      const firstDay = new Date(year, month, 1).getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const calendarDays = [];
+      for (let i = 0; i < firstDay; i++) calendarDays.push(null);
+      for (let i = 1; i <= daysInMonth; i++) calendarDays.push(i);
+
+      const getDayData = (day) => {
+        const key = getDateKey(new Date(year, month, day));
+        return data[key] || null;
+      };
+
+      const getDayStatus = (day, d) => {
+        if (!d) return 'empty';
+        const hasContent = d.tasks.length > 0 || d.priorities.some(p => p.text.trim());
+        if (!hasContent) return 'empty';
+        const allTasksDone = d.tasks.every(t => t.done);
+        const allPriosDone = d.priorities.filter(p => p.text.trim()).every(p => p.done);
+        if (allTasksDone && allPriosDone) return 'completed';
+        return 'pending';
+      };
+
+      // ---- Pantalla de acceso ----
+      if (!authChecked) return null;
+
+      if (!authorized) {
+        return React.createElement(
+          'div', { className: 'min-h-screen bg-slate-950 flex items-center justify-center p-4' },
+          React.createElement(
+            'div', { className: 'bg-slate-900 border-2 border-slate-800 rounded-xl p-8 max-w-sm w-full' },
+            React.createElement('div', { className: 'text-4xl mb-3 text-center' }, '🔒'),
+            React.createElement('h1', { className: 'text-2xl font-black text-white text-center mb-1' }, 'Mi Agenda Virtual'),
+            React.createElement('p', { className: 'text-xs text-slate-500 text-center mb-1' }, 'Factor E'),
+            React.createElement('p', { className: 'text-sm text-slate-400 text-center mb-6' }, 'Acceso exclusivo. Ingresá con el nombre y el correo con el que compraste.'),
+
+            React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Nombre y apellido'),
+            React.createElement('input', {
+              type: 'text', value: loginName, onChange: (e) => setLoginName(e.target.value),
+              onKeyPress: (e) => { if (e.key === 'Enter') handleLogin(); },
+              placeholder: 'Como lo escribiste al comprar',
+              className: 'w-full px-3 py-3 bg-slate-800 border border-slate-700 rounded-lg text-white mb-3 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500'
+            }),
+
+            React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Correo electrónico'),
+            React.createElement('input', {
+              type: 'email', value: loginEmail, onChange: (e) => setLoginEmail(e.target.value),
+              onKeyPress: (e) => { if (e.key === 'Enter') handleLogin(); },
+              placeholder: 'tu@correo.com',
+              className: 'w-full px-3 py-3 bg-slate-800 border border-slate-700 rounded-lg text-white mb-4 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500'
+            }),
+
+            loginError && React.createElement('p', { className: 'text-sm text-red-400 mb-4' }, loginError),
+
+            React.createElement('button', {
+              onClick: handleLogin,
+              disabled: !loginName.trim() || !loginEmail.trim(),
+              className: 'w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 rounded-lg font-bold text-white cursor-pointer'
+            }, 'Ingresar'),
+
+            React.createElement('p', { className: 'text-xs text-slate-500 text-center mt-5' }, '¿No tenés acceso todavía? Consultá con Factor E.')
+          )
+        );
+      }
+
+      return React.createElement(
+        'div',
+        { className: `min-h-screen ${T.page} p-4 md:p-8` },
+        React.createElement(
+          'div',
+          { className: 'max-w-6xl mx-auto' },
+
+          // TOGGLE DE TEMA + SESIÓN
+          React.createElement(
+            'div', { className: 'flex justify-between items-center mb-3 flex-wrap gap-2' },
+            React.createElement('span', { className: `text-xs ${T.faint}` }, '👤 ' + currentUserEmail),
+            React.createElement(
+              'div', { className: 'flex gap-2' },
+              React.createElement('button', {
+                onClick: () => setThemeMode(themeMode === 'dark' ? 'light' : 'dark'),
+                className: `flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-semibold cursor-pointer ${T.navBtn}`
+              }, themeMode === 'dark' ? '☀️ Modo claro' : '🌙 Modo oscuro'),
+              React.createElement('button', {
+                onClick: handleLogout,
+                className: `flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-semibold cursor-pointer ${T.navBtn}`
+              }, '🚪 Cerrar sesión')
+            )
+          ),
+
+          // CALENDARIO
+          React.createElement(
+            'div',
+            { className: `${T.card} border-2 rounded-xl p-4 md:p-6 mb-8` },
+            React.createElement(
+              'div',
+              { className: 'flex items-center justify-between mb-4' },
+              React.createElement('button', { onClick: () => setSelectedDate(new Date(year, month - 1, 1)), className: `px-3 py-1 ${T.muted} hover:opacity-70 text-lg` }, '◀'),
+              React.createElement('h3', { className: `text-lg md:text-xl font-bold ${T.heading} capitalize` }, new Date(year, month).toLocaleString('es-AR', { month: 'long', year: 'numeric' })),
+              React.createElement('button', { onClick: () => setSelectedDate(new Date(year, month + 1, 1)), className: `px-3 py-1 ${T.muted} hover:opacity-70 text-lg` }, '▶')
+            ),
+            React.createElement(
+              'div',
+              { className: 'grid grid-cols-7 gap-1 mb-1' },
+              ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map(d => React.createElement('div', { key: d, className: `text-center text-xs font-bold ${T.faint} py-1` }, d))
+            ),
+            React.createElement(
+              'div',
+              { className: 'grid grid-cols-7 gap-1' },
+              calendarDays.map((day, idx) => {
+                if (!day) return React.createElement('div', { key: idx, className: 'min-h-[70px] md:min-h-[90px]' });
+                const d = getDayData(day);
+                const status = getDayStatus(day, d);
+                const date = new Date(year, month, day);
+                const isSelected = getDateKey(date) === dateKey;
+                const isToday = getDateKey(date) === getDateKey(new Date());
+                let cellClass = 'min-h-[70px] md:min-h-[90px] p-1 rounded-lg cursor-pointer transition-all border text-left overflow-hidden ';
+                if (isSelected) cellClass += 'bg-blue-950 border-2 border-blue-500';
+                else if (isToday) cellClass += T.cellToday;
+                else if (status === 'completed') cellClass += 'bg-green-950 border border-green-800 hover:border-green-600';
+                else if (status === 'pending') cellClass += (themeMode === 'dark' ? 'bg-slate-900 ' : 'bg-white ') + 'border border-amber-700 hover:border-amber-500';
+                else cellClass += T.cellEmpty;
+
+                const allItems = d ? d.tasks : [];
+                const preview = allItems.slice(0, 2);
+                const extra = allItems.length - preview.length;
+
+                return React.createElement(
+                  'button', { key: idx, onClick: () => setSelectedDate(date), className: cellClass },
+                  React.createElement('div', { className: 'flex items-center justify-between px-1' },
+                    React.createElement('span', { className: 'text-xs font-bold ' + (isSelected || isToday ? (themeMode === 'dark' ? 'text-white' : 'text-slate-900') : T.muted) }, day),
+                    status === 'completed' && React.createElement('span', { className: 'text-[10px]' }, '✓')
+                  ),
+                  React.createElement(
+                    'div', { className: 'mt-1 space-y-0.5 px-0.5' },
+                    preview.map(t => React.createElement(
+                      'div', { key: t.id, className: `text-[9px] md:text-[10px] truncate px-1 py-0.5 rounded ${catById(t.category).color} text-white ${t.done ? 'opacity-40 line-through' : ''}` },
+                      t.text
+                    )),
+                    extra > 0 && React.createElement('div', { className: `text-[9px] ${T.faint} px-1` }, '+' + extra + ' más')
+                  )
+                );
+              })
+            ),
+            React.createElement(
+              'div',
+              { className: `mt-4 pt-3 border-t ${themeMode === 'dark' ? 'border-slate-800' : 'border-slate-200'} flex flex-wrap gap-4 text-xs` },
+              React.createElement('div', { className: 'flex items-center gap-2' }, React.createElement('div', { className: 'w-3 h-3 bg-green-950 border border-green-700 rounded' }), React.createElement('span', { className: T.muted }, 'Completado')),
+              React.createElement('div', { className: 'flex items-center gap-2' }, React.createElement('div', { className: 'w-3 h-3 border border-amber-700 rounded' }), React.createElement('span', { className: T.muted }, 'Pendiente')),
+              React.createElement('div', { className: 'flex items-center gap-2' }, React.createElement('div', { className: 'w-3 h-3 border-2 border-slate-500 rounded' }), React.createElement('span', { className: T.muted }, 'Hoy'))
+            )
+          ),
+
+          // DÍA SELECCIONADO
+          React.createElement(
+            'div',
+            { className: 'mb-10' },
+            React.createElement(
+              'div',
+              { className: 'flex items-end gap-4 mb-4' },
+              React.createElement('h1', { className: `text-4xl md:text-5xl font-black ${T.heading}` }, selectedDate.getDate()),
+              React.createElement('div', null,
+                React.createElement('p', { className: `${T.muted} capitalize` }, selectedDate.toLocaleString('es-AR', { weekday: 'long' })),
+                React.createElement('p', { className: `${T.faint} text-sm` }, selectedDate.toLocaleString('es-AR', { month: 'long', year: 'numeric' }))
+              )
+            ),
+            React.createElement('input', {
+              type: 'text', value: dayData.phrase, onChange: (e) => updateDay({ phrase: e.target.value }),
+              placeholder: '✨ Frase del día...',
+              className: `w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 italic ${T.input}`
+            }),
+            React.createElement(
+              'div',
+              { className: `${T.card} rounded-lg p-3 border` },
+              React.createElement(
+                'div', { className: 'flex justify-between items-center mb-2' },
+                React.createElement('span', { className: `text-xs ${T.muted}` }, completedCount + ' de ' + totalItems + ' completadas'),
+                React.createElement('span', { className: 'text-base font-bold text-green-500' }, progressPercent + '%')
+              ),
+              React.createElement('div', { className: 'w-full bg-slate-700 bg-opacity-30 rounded-full h-1.5 mb-2' },
+                React.createElement('div', { className: 'bg-green-500 h-1.5 rounded-full transition-all', style: { width: progressPercent + '%' } })
+              ),
+              React.createElement('p', { className: `text-xs ${T.muted}` }, motivation)
+            )
+          ),
+
+          // 3 PRIORIDADES — color distinto a los bloques
+          React.createElement(
+            'div',
+            { className: 'mb-10' },
+            React.createElement('h2', { className: `text-2xl font-black ${T.heading} mb-4 uppercase tracking-wide` }, '3 PRIORIDADES (pilares del día)'),
+            React.createElement(
+              'div', { className: 'grid grid-cols-1 sm:grid-cols-3 gap-4' },
+              dayData.priorities.map((priority, idx) =>
+                React.createElement(
+                  'div', { key: idx, className: 'min-h-24 bg-gradient-to-br from-rose-600 to-rose-800 rounded-xl p-4 border-2 border-rose-400 relative' },
+                  React.createElement('div', { className: 'absolute top-2 right-2 text-xs font-bold text-rose-200' }, '0' + (idx + 1)),
+                  React.createElement('input', {
+                    type: 'text', value: priority.text, onChange: (e) => updatePriorityText(idx, e.target.value),
+                    placeholder: 'Prioridad ' + (idx + 1),
+                    className: 'w-full bg-transparent text-white font-semibold text-sm placeholder-rose-200 placeholder-opacity-70 focus:outline-none mb-3'
+                  }),
+                  priority.text.trim() && React.createElement(
+                    'label', { className: 'flex items-center gap-2 text-xs text-rose-100 cursor-pointer' },
+                    React.createElement('input', { type: 'checkbox', checked: priority.done, onChange: () => togglePriorityDone(idx), className: 'w-4 h-4 accent-green-500' }),
+                    priority.done ? 'Cumplida' : 'Marcar cumplida'
+                  )
+                )
+              )
+            )
+          ),
+
+          // BLOC DE NOTAS + TAREAS DE HOY
+          React.createElement(
+            'div', { className: 'mb-10 grid grid-cols-1 lg:grid-cols-3 gap-6' },
+
+            React.createElement(
+              'div', { className: 'lg:col-span-1' },
+              React.createElement(
+                'div', { className: 'bg-amber-50 text-slate-900 rounded-xl p-6 border-2 border-amber-200 flex flex-col min-h-[560px]' },
+                React.createElement('h3', { className: 'text-base font-black uppercase tracking-wide mb-1 text-amber-900' }, '📝 Bloc de notas'),
+                React.createElement('p', { className: 'text-sm text-amber-700 mb-4' }, 'Anotá y acomodá el día en general, antes de repartirlo en los bloques.'),
+                React.createElement(
+                  'div', { className: 'space-y-1.5 mb-4' },
+                  notes.length === 0 && React.createElement('p', { className: 'text-sm text-amber-600 italic' }, 'Vacío por ahora. Tirá ideas sueltas acá.'),
+                  notes.map((note, idx) =>
+                    React.createElement(
+                      'div', {
+                        key: note.id,
+                        draggable: false,
+                        onDragOver: (e) => { e.preventDefault(); setDragOverNoteId(note.id); },
+                        onDragLeave: () => setDragOverNoteId(prev => prev === note.id ? null : prev),
+                        onDrop: (e) => { e.preventDefault(); if (dragNoteId) reorderNotes(dragNoteId, note.id); setDragNoteId(null); setDragOverNoteId(null); },
+                        className: 'flex items-center gap-1.5 bg-white bg-opacity-60 rounded-lg px-2 py-2 transition-all ' + (dragOverNoteId === note.id && dragNoteId && dragNoteId !== note.id ? 'ring-2 ring-amber-500' : '') + (dragNoteId === note.id ? ' opacity-40' : '')
+                      },
+                      React.createElement('span', {
+                        draggable: true,
+                        onDragStart: (e) => { setDragNoteId(note.id); e.dataTransfer.effectAllowed = 'move'; },
+                        onDragEnd: () => { setDragNoteId(null); setDragOverNoteId(null); },
+                        title: 'Arrastrá para reordenar',
+                        className: 'text-amber-500 hover:text-amber-700 cursor-grab active:cursor-grabbing px-1 flex-shrink-0 select-none text-base leading-none'
+                      }, '⠿'),
+                      React.createElement('input', { type: 'checkbox', checked: note.done, onChange: () => toggleNote(note.id), className: 'w-5 h-5 accent-amber-600 cursor-pointer flex-shrink-0' }),
+                      React.createElement('input', {
+                        type: 'text', value: note.text, onChange: (e) => updateNoteText(note.id, e.target.value),
+                        className: `flex-1 min-w-0 bg-transparent text-sm focus:outline-none truncate focus:text-clip focus:whitespace-normal ${note.done ? 'line-through text-amber-500' : 'text-slate-800'}`
+                      }),
+                      React.createElement('button', { onClick: () => deleteNote(note.id), className: 'text-amber-700 hover:text-red-600 text-xs px-1 flex-shrink-0' }, '✕')
+                    )
+                  )
+                ),
+                React.createElement(
+                  'div', { className: 'flex flex-col gap-2' },
+                  React.createElement('textarea', {
+                    value: newNoteText, onChange: (e) => setNewNoteText(e.target.value),
+                    onKeyDown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } },
+                    placeholder: 'Anotar algo... (Enter para guardar, Shift+Enter para salto de línea)',
+                    rows: 4,
+                    className: 'w-full px-4 py-3 bg-white bg-opacity-70 border border-amber-300 rounded-lg text-base text-slate-800 placeholder-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-y'
+                  }),
+                  React.createElement('button', { onClick: addNote, className: 'px-4 py-3 bg-amber-600 hover:bg-amber-700 rounded-lg font-bold text-white text-base cursor-pointer' }, '+ Agregar nota')
+                )
+              )
+            ),
+
+            React.createElement(
+              'div', { className: 'lg:col-span-2' },
+              React.createElement('h2', { className: `text-2xl font-black ${T.heading} mb-2 uppercase tracking-wide` }, 'TAREAS DE HOY'),
+              React.createElement('p', { className: `text-xs ${T.faint} mb-6` }, 'Agregá directo en el bloque que corresponda.'),
+              CATEGORIES.map(cat => {
+                const catTasks = tasksByCategory[cat.id];
+                const qa = quickAdd[cat.id];
+                return React.createElement(
+                  'div', { key: cat.id, className: 'mb-6' },
+                  React.createElement(
+                    'div', { className: `${cat.color} border-2 ${cat.borderColor} rounded-xl p-4` },
+                    React.createElement(
+                      'div', { className: 'flex items-center justify-between flex-wrap gap-2 mb-4' },
+                      React.createElement('h3', { className: `text-lg font-black ${cat.textColor} uppercase` }, cat.icon + ' ' + cat.label),
+                      React.createElement(
+                        'div', { className: 'flex items-center gap-2 bg-black bg-opacity-40 rounded-lg px-3 py-1.5 border border-white border-opacity-10' },
+                        React.createElement('span', {
+                          className: 'font-mono text-lg tracking-widest text-green-400',
+                          style: { textShadow: '0 0 6px rgba(74,222,128,0.6)' }
+                        }, formatTime(getElapsedSeconds(cat.id))),
+                        React.createElement('button', {
+                          onClick: () => getTimer(cat.id).running ? pauseTimer(cat.id) : startTimer(cat.id),
+                          title: getTimer(cat.id).running ? 'Pausar' : 'Iniciar',
+                          className: 'w-7 h-7 flex items-center justify-center rounded bg-white bg-opacity-10 hover:bg-opacity-20 text-white text-xs cursor-pointer'
+                        }, getTimer(cat.id).running ? '⏸' : '▶'),
+                        React.createElement('button', {
+                          onClick: () => resetTimer(cat.id),
+                          title: 'Reiniciar',
+                          className: 'w-7 h-7 flex items-center justify-center rounded bg-white bg-opacity-10 hover:bg-opacity-20 text-white text-xs cursor-pointer'
+                        }, '⟲')
+                      )
+                    ),
+
+                    React.createElement(
+                      'div', { className: 'space-y-2 mb-3' },
+                      catTasks.length > 0 ? catTasks.map(task =>
+                        React.createElement(
+                          'div', { key: task.id, className: 'bg-slate-800 border border-slate-700 rounded-lg p-3 flex items-center gap-3 flex-wrap' },
+                          React.createElement('input', { type: 'checkbox', checked: task.done, onChange: () => toggleTask(task.id), className: 'w-5 h-5 rounded cursor-pointer accent-green-500' }),
+                          task.time && React.createElement('span', { className: 'text-sm font-bold font-mono text-white bg-slate-950 border border-slate-600 px-2 py-1 rounded' }, '🕐 ' + task.time),
+                          React.createElement('button', {
+                            onClick: () => toggleTaskReminder(task.id),
+                            title: task.reminder ? 'Recordatorio activado' : 'Sin recordatorio',
+                            className: 'w-8 h-8 flex items-center justify-center rounded-lg text-sm cursor-pointer ' + (task.reminder ? 'bg-yellow-500 text-slate-900' : 'bg-slate-950 bg-opacity-60 border border-slate-600 text-slate-400')
+                          }, task.reminder ? '🔔' : '🔕'),
+                          React.createElement(
+                            'div', { className: 'flex-1 min-w-32 flex items-center gap-2 flex-wrap' },
+                            React.createElement('span', { className: `text-sm font-bold px-2 py-1 rounded shadow ${PRIORITY_STYLE[task.priority].badge}` }, '★' + task.priority),
+                            React.createElement('p', { className: 'font-semibold text-white' }, task.text)
+                          ),
+                          React.createElement('button', { onClick: () => openEdit(task), className: 'px-2 py-1 text-xs text-blue-300 hover:text-blue-100 border border-blue-800 rounded' }, '✎ Editar'),
+                          React.createElement('button', { onClick: () => deleteTask(task.id), className: 'px-3 py-1 text-slate-400 hover:text-red-400 text-sm' }, '✕')
+                        )
+                      ) : React.createElement('p', { className: 'text-xs text-slate-300 italic px-1' }, 'Sin tareas todavía.')
+                    ),
+
+                    React.createElement(
+                      'div', { className: 'flex gap-2 flex-wrap pt-2 border-t border-white border-opacity-10' },
+                      React.createElement('input', {
+                        type: 'time', value: qa.time, onChange: (e) => updateQuickAdd(cat.id, 'time', e.target.value),
+                        className: 'px-2 py-2 bg-slate-950 bg-opacity-40 border border-slate-600 rounded-lg text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500'
+                      }),
+                      React.createElement('button', {
+                        type: 'button',
+                        onClick: () => { updateQuickAdd(cat.id, 'reminder', !qa.reminder); if (!qa.reminder) requestNotifPermission(); },
+                        title: qa.reminder ? 'Recordatorio activado' : 'Sin recordatorio',
+                        className: 'px-2.5 py-2 rounded-lg text-xs cursor-pointer ' + (qa.reminder ? 'bg-yellow-500 text-slate-900' : 'bg-slate-950 bg-opacity-40 border border-slate-600 text-slate-400')
+                      }, qa.reminder ? '🔔' : '🔕'),
+                      React.createElement(
+                        'select', { value: qa.priority, onChange: (e) => updateQuickAdd(cat.id, 'priority', e.target.value), className: 'px-2 py-2 bg-slate-950 bg-opacity-40 border border-slate-600 rounded-lg text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500' },
+                        React.createElement('option', { value: '1' }, '★1'),
+                        React.createElement('option', { value: '2' }, '★2'),
+                        React.createElement('option', { value: '3' }, '★3')
+                      ),
+                      React.createElement('input', {
+                        type: 'text', value: qa.text, onChange: (e) => updateQuickAdd(cat.id, 'text', e.target.value),
+                        onKeyPress: (e) => { if (e.key === 'Enter') addQuickTask(cat.id); },
+                        placeholder: 'Agregar tarea de ' + cat.label.toLowerCase() + '...',
+                        className: 'flex-1 min-w-40 px-3 py-2 bg-slate-950 bg-opacity-40 border border-slate-600 rounded-lg text-white text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500'
+                      }),
+                      React.createElement('button', { onClick: () => addQuickTask(cat.id), className: 'px-4 py-2 bg-white bg-opacity-10 hover:bg-opacity-20 rounded-lg font-bold text-white text-sm cursor-pointer' }, '+')
+                    )
+                  )
+                );
+              })
+            )
+          ),
+
+          // COMPLETADAS
+          completedTasks.length > 0 && React.createElement(
+            'div', { className: 'mb-10 bg-green-900 bg-opacity-20 border-2 border-green-700 rounded-xl p-6' },
+            React.createElement('h2', { className: 'text-xl font-black text-green-400 mb-4 uppercase tracking-wide' }, '✓ COMPLETADAS HOY (' + completedTasks.length + ')'),
+            React.createElement(
+              'div', { className: 'space-y-2' },
+              completedTasks.map(task =>
+                React.createElement(
+                  'div', { key: task.id, className: 'bg-slate-800 border border-green-700 rounded-lg p-3 text-green-300 flex items-center justify-between flex-wrap gap-2' },
+                  React.createElement(
+                    'div', { className: 'flex-1 flex items-center gap-2' },
+                    React.createElement('input', { type: 'checkbox', checked: task.done, onChange: () => toggleTask(task.id), title: 'Destildar (vuelve a pendientes)', className: 'w-5 h-5 rounded cursor-pointer accent-green-500' }),
+                    React.createElement('span', { className: `text-xs font-bold px-2 py-1 rounded shadow ${PRIORITY_STYLE[task.priority].badge}` }, '★' + task.priority),
+                    task.time && React.createElement('span', { className: 'text-xs font-bold font-mono text-green-300 bg-slate-900 border border-green-800 px-2 py-1 rounded' }, '🕐 ' + task.time),
+                    React.createElement('p', { className: 'font-semibold line-through' }, task.text)
+                  ),
+                  React.createElement('button', { onClick: () => openEdit(task), className: 'px-2 py-1 text-xs text-green-300 hover:text-green-100 border border-green-800 rounded' }, '✎ Editar'),
+                  React.createElement('button', { onClick: () => deleteTask(task.id), className: 'px-3 py-1 text-green-400 hover:text-red-400 text-sm' }, '✕')
+                )
+              )
+            )
+          ),
+
+          // REGISTRO DE TIEMPO
+          timerLog.length > 0 && React.createElement(
+            'div', { className: `mb-10 ${T.card} border-2 rounded-xl p-6` },
+            React.createElement('h2', { className: `text-xl font-black ${T.heading} mb-1 uppercase tracking-wide` }, '🕓 Registro de tiempo'),
+            React.createElement('p', { className: `text-xs ${T.faint} mb-4` }, 'Cuánto le dedicaste a cada bloque hoy.'),
+            React.createElement(
+              'div', { className: 'grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5' },
+              CATEGORIES.map(cat => React.createElement(
+                'div', { key: cat.id, className: `${cat.color} border ${cat.borderColor} rounded-lg p-3 text-center` },
+                React.createElement('p', { className: `text-xs font-bold ${cat.textColor} uppercase mb-1` }, cat.icon + ' ' + cat.label),
+                React.createElement('p', { className: 'font-mono text-lg font-bold text-white' }, formatTime(totalsByCategory[cat.id]))
+              ))
+            ),
+            React.createElement(
+              'div', { className: 'space-y-1.5 max-h-64 overflow-y-auto' },
+              sortedLog.map(entry => {
+                const cat = catById(entry.category);
+                return React.createElement(
+                  'div', { key: entry.id, className: `flex items-center gap-3 ${T.cardAlt} border rounded-lg px-3 py-2 text-sm flex-wrap` },
+                  React.createElement('span', { className: `px-2 py-0.5 rounded text-xs font-bold ${cat.textColor} ${cat.color}` }, cat.icon + ' ' + cat.label),
+                  React.createElement('span', { className: `${T.muted} font-mono text-xs` }, formatClock(entry.start) + ' – ' + formatClock(entry.end)),
+                  React.createElement('span', { className: 'text-green-500 font-mono font-bold ml-auto' }, formatTime(entry.duration)),
+                  React.createElement('button', { onClick: () => deleteLogEntry(entry.id), className: `px-2 ${T.faint} hover:text-red-400 text-xs` }, '✕')
+                );
+              })
+            )
+          ),
+
+          // NAV
+          React.createElement(
+            'div', { className: 'flex gap-3' },
+            React.createElement('button', { onClick: () => setSelectedDate(new Date()), className: `flex-1 px-4 py-3 rounded-lg font-semibold border cursor-pointer ${T.navBtn}` }, 'Hoy'),
+            React.createElement('button', { onClick: () => setSelectedDate(new Date(selectedDate.getTime() - 24 * 60 * 60 * 1000)), className: `px-4 py-3 rounded-lg font-semibold border cursor-pointer ${T.navBtn}` }, '◀'),
+            React.createElement('button', { onClick: () => setSelectedDate(new Date(selectedDate.getTime() + 24 * 60 * 60 * 1000)), className: `px-4 py-3 rounded-lg font-semibold border cursor-pointer ${T.navBtn}` }, '▶'),
+            React.createElement('button', { onClick: exportPDF, className: 'flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold text-white cursor-pointer' }, '⬇ Descargar PDF')
+          )
+        ),
+
+        // MODAL EDICIÓN COMPLETA
+        editingTask && React.createElement(
+          'div', { className: 'fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50' },
+          React.createElement(
+            'div', { className: 'bg-slate-900 border-2 border-slate-700 rounded-xl p-6 max-w-md w-full' },
+            React.createElement('h3', { className: 'text-lg font-black text-white mb-4' }, '✎ Editar tarea'),
+
+            React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Nombre'),
+            React.createElement('input', {
+              type: 'text', value: editingTask.text, onChange: (e) => setEditingTask({ ...editingTask, text: e.target.value }),
+              className: 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white mb-3 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500'
+            }),
+
+            React.createElement(
+              'div', { className: 'grid grid-cols-2 gap-3 mb-3' },
+              React.createElement('div', null,
+                React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Horario'),
+                React.createElement('input', {
+                  type: 'time', value: editingTask.time, onChange: (e) => setEditingTask({ ...editingTask, time: e.target.value }),
+                  className: 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500'
+                })
+              ),
+              React.createElement('div', null,
+                React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Prioridad'),
+                React.createElement(
+                  'select', { value: editingTask.priority, onChange: (e) => setEditingTask({ ...editingTask, priority: e.target.value }), className: 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500' },
+                  React.createElement('option', { value: '1' }, '★1 Oro (Alta)'),
+                  React.createElement('option', { value: '2' }, '★2 Plata (Media)'),
+                  React.createElement('option', { value: '3' }, '★3 Bronce (Baja)')
+                )
+              )
+            ),
+
+            React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Bloque'),
+            React.createElement(
+              'select', { value: editingTask.category, onChange: (e) => setEditingTask({ ...editingTask, category: e.target.value }), className: 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white mb-3 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500' },
+              CATEGORIES.map(c => React.createElement('option', { key: c.id, value: c.id }, c.icon + ' ' + c.label))
+            ),
+
+            React.createElement('label', { className: 'text-xs text-slate-400 font-semibold' }, 'Día'),
+            React.createElement('input', {
+              type: 'date', value: editingTask.date, onChange: (e) => setEditingTask({ ...editingTask, date: e.target.value }),
+              className: 'w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white mb-4 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500'
+            }),
+
+            React.createElement(
+              'div', { className: 'flex items-center justify-between mb-4 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2' },
+              React.createElement('span', { className: 'text-sm text-slate-300' }, '⏰ Recordarme (alarma)'),
+              React.createElement('button', {
+                type: 'button',
+                onClick: () => { const v = !editingTask.reminder; if (v) requestNotifPermission(); setEditingTask({ ...editingTask, reminder: v }); },
+                className: 'px-3 py-1.5 rounded-lg text-sm font-bold cursor-pointer ' + (editingTask.reminder ? 'bg-yellow-500 text-slate-900' : 'bg-slate-700 text-slate-400')
+              }, editingTask.reminder ? '🔔 Activado' : '🔕 Desactivado')
+            ),
+
+            React.createElement(
+              'div', { className: 'flex gap-3' },
+              React.createElement('button', { onClick: () => setEditingTask(null), className: 'flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 rounded-lg font-semibold text-white border border-slate-700' }, 'Cancelar'),
+              React.createElement('button', { onClick: saveEdit, disabled: !editingTask.text.trim(), className: 'flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 rounded-lg font-semibold text-white' }, 'Guardar')
+            )
+          )
+        ),
+
+        // MODAL DE ALARMA DISPARADA
+        activeReminder && React.createElement(
+          'div', { className: 'fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50' },
+          React.createElement(
+            'div', { className: 'bg-slate-900 border-2 border-yellow-500 rounded-xl p-6 max-w-sm w-full text-center' },
+            React.createElement('div', { className: 'text-5xl mb-3' }, '⏰'),
+            React.createElement('h3', { className: 'text-lg font-black text-white mb-2 uppercase' }, 'Recordatorio'),
+            React.createElement('p', { className: 'text-slate-300 mb-6' }, activeReminder.text),
+            React.createElement('button', { onClick: () => setActiveReminder(null), className: 'w-full px-4 py-3 bg-yellow-500 hover:bg-yellow-600 rounded-lg font-bold text-slate-900 cursor-pointer' }, 'Entendido')
+          )
+        )
+      );
+    }
+
+    ReactDOM.render(React.createElement(MiDia), document.getElementById('root'));
+  </script>
+</body>
+</html>
